@@ -41,6 +41,9 @@ class BoundaryTests(unittest.TestCase):
             def create(inner, body):
                 self.calls.append(body)
                 return {"jobId": "created"}
+            def close_session(inner, instance_id, body):
+                self.calls.append((instance_id, body))
+                return {"closed": True, "paneId": "wA:p1"}
         self.server = Server(("127.0.0.1", 0), make_handler(App()))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -91,12 +94,26 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(status, expected)
         self.assertEqual(self.calls, [])
 
+    def test_close_cannot_be_invoked_cross_origin_or_without_request_marker(self):
+        for headers in (
+            {"Origin": "https://unrelated.example", "X-OMP-Hub": "1"},
+            {},
+        ):
+            with self.subTest(headers=headers):
+                status, _, _ = self.request("POST", "/api/sessions/abcd1234-host/close",
+                                            {"Content-Type": "application/json", **headers},
+                                            '{"generation":2,"target":{},"confirmed":true}')
+                self.assertEqual(status, 403)
+        self.assertEqual(self.calls, [])
+
 
 class SessionTests(unittest.TestCase):
     def setUp(self):
         self.file = tempfile.NamedTemporaryFile()
         self.hub = Hub(self.file.name)
-        self.host = {"instanceId": "abcd1234-host", "generation": 2, "access": "control"}
+        self.host = {"instanceId": "abcd1234-host", "generation": 2, "access": "control", "pid": 6543, "sessionId": "session-exact"}
+        self.target = {"paneId": "wA:p1", "terminalId": "terminal-original", "tabId": "wA:t1",
+                       "workspaceId": "wA", "closesTab": False, "closesWorkspace": False}
 
     def tearDown(self):
         self.file.close()
@@ -150,6 +167,51 @@ class SessionTests(unittest.TestCase):
     def test_workspace_identifiers_are_opaque_not_decimal_numbers(self):
         spec = creation_spec({"workspaceId": "wA"})
         self.assertEqual(spec["workspaceId"], "wA")
+
+    def test_close_requires_explicit_confirmation_before_adapter_execution(self):
+        with patch("omp_hub.hub.command_json") as command:
+            for value in (False, 1, None):
+                with self.subTest(value=value), self.assertRaises(RequestError) as error:
+                    self.hub.close_session(self.host["instanceId"], {"generation": 2, "target": self.target, "confirmed": value})
+                self.assertEqual(error.exception.status, 400)
+            command.assert_not_called()
+
+    def test_close_rejects_replaced_generation_before_adapter_execution(self):
+        with patch.object(self.hub, "sessions", return_value={"sessions": [self.host]}), patch("omp_hub.hub.command_json") as command:
+            with self.assertRaises(RequestError) as error:
+                self.hub.close_session(self.host["instanceId"], {"generation": 1, "target": self.target, "confirmed": True})
+            self.assertEqual(error.exception.status, 409)
+            command.assert_not_called()
+
+    def test_view_only_host_cannot_preview_or_confirm_close(self):
+        host = {**self.host, "access": "view"}
+        with patch.object(self.hub, "sessions", return_value={"sessions": [host]}), patch("omp_hub.hub.command_json") as command:
+            for operation, body in (
+                (self.hub.preview_close, {"generation": 2}),
+                (self.hub.close_session, {"generation": 2, "target": self.target, "confirmed": True}),
+            ):
+                with self.subTest(operation=operation.__name__), self.assertRaises(RequestError) as error:
+                    operation(host["instanceId"], body)
+                self.assertEqual(error.exception.status, 403)
+            command.assert_not_called()
+
+    def test_changed_close_target_is_a_conflict_not_success(self):
+        with patch.object(self.hub, "sessions", return_value={"sessions": [self.host]}), patch("omp_hub.hub.command_json", return_value={"error": "Pane changed. Refresh before closing.", "status": 409}):
+            with self.assertRaises(RequestError) as error:
+                self.hub.close_session(self.host["instanceId"], {"generation": 2, "target": self.target, "confirmed": True})
+            self.assertEqual(error.exception.status, 409)
+
+    def test_confirmation_cannot_understate_or_misparse_workspace_impact(self):
+        for target in (
+            {**self.target, "closesWorkspace": "false"},
+            {**self.target, "closesWorkspace": True, "closesTab": False},
+            {**self.target, "paneId": ""},
+        ):
+            with self.subTest(target=target), patch("omp_hub.hub.command_json") as command:
+                with self.assertRaises(RequestError) as error:
+                    self.hub.close_session(self.host["instanceId"], {"generation": 2, "target": target, "confirmed": True})
+                self.assertEqual(error.exception.status, 400)
+                command.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -4,10 +4,19 @@ A lightweight phone-friendly front door for live [OMP](https://github.com/can135
 
 - List live collaboration sessions across projects, with activity and input-required status.
 - Open OMP's native browser conversation with the access published by its host.
+- Close a live session's Herdr pane, with confirmation and the same scope as `prefix+x`.
 - Create a fresh or shared task workspace, clone a repository, or add an OMP tab to an existing workspace through a configured launcher adapter.
 - Reach an IDE-forwarded CDE dashboard from a phone using a small Mac LAN gateway.
 
 Saved conversations and stopped sessions are not listed. The hub is a launcher, not another chat client. Conversation traffic still uses OMP's end-to-end-encrypted collaboration relay.
+
+## Closing a session
+
+**Close session** stops the selected live agent by closing its Herdr pane, not by deleting its saved OMP conversation. It leaves sibling panes, including an editor split, open. If it is the last pane, Herdr closes the containing tab or workspace and its normal checkout cleanup runs. The confirmation shows the current impact and warns when the agent is working.
+
+Only control-enabled collaboration hosts with an exact, foreground Herdr match can be closed. Standalone sessions, ambiguous matches, and stale confirmations are refused. The hub never guesses a pane from a title or working directory, kills an arbitrary PID, or broadens a failed pane close to a workspace close. A lost response is not retried automatically; refresh and inspect Herdr before another close.
+
+The adapter rechecks the collaboration generation, saved-session identity, foreground PID, terminal identity, and layout immediately before invoking native pane close. Herdr does not offer an atomic expected-session condition for that operation, so concurrent external pane replacement cannot be serialized by the hub.
 
 ## Trust boundary
 
@@ -85,10 +94,12 @@ The adapter is a local Python file selected by the operator, never by an HTTP re
 
 - `adapter.py inventory`: emit JSON with `repositories` and `workspaces` arrays. Entries have `id`, `name`, and `path` or `cwd`.
 - `adapter.py create`: read a JSON object from stdin and emit a ready result `{ "workspaceId": "w1", "paneId": "w1:p1", "cwd": "/checkout" }` or `{ "error": "safe user-facing explanation" }`.
+- `adapter.py close-preview`: resolve a trusted collaboration host to its exact live pane and return a confirmation target, including whether its tab or workspace would close.
+- `adapter.py close`: revalidate the same host and confirmation target, then close only that pane. Errors may include a numeric HTTP `status` alongside the safe `error`.
 
 Creation accepts `repository`, `checkout` (`fresh` or `primary`), `agent`, `editor`, and `prompt`. `workspaceId` instead selects an existing workspace for a new OMP tab. `cloneRepository` and optional `cloneRoot` instead request a GitHub checkout. Unknown options and invalid types are rejected. The adapter owns path validation, repository policy, safe argv construction, readiness, and preserving checkout lifetime after a request returns.
 
-Creation runs asynchronously, with at most four pending jobs and 64 retained statuses. Status is in memory, not a durable job database. After a timeout, lost response, or hub restart, inspect Herdr before resubmitting: the workspace may already exist. No operation closes existing workspaces or resumes historical sessions.
+Creation runs asynchronously, with at most four pending jobs and 64 retained statuses. Status is in memory, not a durable job database. After a timeout, lost response, or hub restart, inspect Herdr before resubmitting: the workspace may already exist. Closing an existing workspace occurs only as Herdr's normal consequence of a confirmed last-pane close. The hub does not resume or delete historical sessions.
 
 ## Development
 

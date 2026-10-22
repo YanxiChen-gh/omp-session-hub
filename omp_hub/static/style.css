@@ -14,6 +14,7 @@ p { margin: 8px 0 16px; }
 button, input, select, textarea, .button { font: inherit; }
 button, .button { min-height: 44px; padding: 10px 17px; border: 1px solid transparent; border-radius: 9px; background: var(--accent); color: #fff; font-weight: 650; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; text-align: center; }
 button.secondary, .button.secondary { color: var(--text); background: var(--surface); border-color: var(--line); }
+button.secondary.danger { color: var(--error); border-color: var(--error); }
 button:disabled { cursor: not-allowed; opacity: .6; }
 a, button, input, textarea, select { touch-action: manipulation; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }

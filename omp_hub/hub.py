@@ -1,4 +1,4 @@
-"""Loopback session discovery and workspace creation server."""
+"""Loopback session discovery, pane closing, and workspace creation."""
 
 import importlib.resources
 import json
@@ -18,6 +18,7 @@ from .http import Handler, RequestError, Server
 HOST_ID = re.compile(r"^[a-z0-9-]{8,64}$")
 MAX_OUTPUT = 2 * 1024 * 1024
 HOST_FIELDS = ("instanceId", "generation", "pid", "sessionId", "sessionName", "cwd", "model", "startedAt", "participants", "relayConnected", "inputRequired", "busy", "access")
+CLOSE_TARGET_FIELDS = {"paneId", "terminalId", "tabId", "workspaceId", "closesTab", "closesWorkspace"}
 
 
 def command_json(argv, data=None, timeout=15, allow_error=False):
@@ -121,15 +122,21 @@ class Hub:
             self.cache_at = time.monotonic()
             return self.cache
 
-    def open_session(self, instance_id, body):
-        if not HOST_ID.fullmatch(instance_id) or set(body) != {"generation"} or type(body["generation"]) is not int:
+    def selected_host(self, instance_id, generation):
+        if not HOST_ID.fullmatch(instance_id) or type(generation) is not int or generation < 1:
             raise RequestError(400, "Invalid session selection")
         hosts = self.sessions(fresh=True)["sessions"]
         host = next((item for item in hosts if item["instanceId"] == instance_id), None)
         if host is None:
             raise RequestError(404, "Session is no longer available. Refresh the list.")
-        if host["generation"] != body["generation"]:
-            raise RequestError(409, "Session changed. Refresh the list before opening it.")
+        if host["generation"] != generation:
+            raise RequestError(409, "Session changed. Refresh the list before continuing.")
+        return host
+
+    def open_session(self, instance_id, body):
+        if set(body) != {"generation"}:
+            raise RequestError(400, "Invalid session selection")
+        host = self.selected_host(instance_id, body["generation"])
         argv = ["omp", "collab", "link", instance_id, "--json"]
         if host["access"] == "view":
             argv.append("--view")
@@ -145,6 +152,64 @@ class Hub:
         if not valid:
             raise RequestError(502, "OMP returned an unsafe browser URL")
         return {"url": url}
+
+    @staticmethod
+    def close_target(value):
+        if not isinstance(value, dict) or set(value) != CLOSE_TARGET_FIELDS:
+            raise RequestError(400, "Invalid close confirmation target")
+        for key in ("paneId", "terminalId", "tabId", "workspaceId"):
+            if not isinstance(value[key], str) or not value[key] or len(value[key]) > 256 or any(ord(char) < 32 for char in value[key]):
+                raise RequestError(400, "Invalid close confirmation target")
+        if type(value["closesTab"]) is not bool or type(value["closesWorkspace"]) is not bool:
+            raise RequestError(400, "Invalid close confirmation impact")
+        if value["closesWorkspace"] and not value["closesTab"]:
+            raise RequestError(400, "Invalid close confirmation impact")
+        return value
+
+    def _close_adapter(self, operation, instance_id, generation, target=None):
+        host = self.selected_host(instance_id, generation)
+        if host["access"] != "control":
+            raise RequestError(403, "This session is shared view-only and cannot be closed here.")
+        if type(host.get("pid")) is not int or host["pid"] <= 0 or not isinstance(host.get("sessionId"), str) or not host["sessionId"]:
+            raise RequestError(409, "OMP did not publish enough identity information to close this session safely.")
+        payload = {"host": {key: host[key] for key in ("instanceId", "generation", "pid", "sessionId", "access")}}
+        if target is not None:
+            payload["target"] = target
+        try:
+            result = command_json([sys.executable, self.adapter, operation], payload, timeout=15, allow_error=True)
+        except RequestError as error:
+            if error.status == 504:
+                raise RequestError(504, "Close status is unknown. Refresh and inspect Herdr before trying again." if operation == "close" else "Could not inspect the session in time. Refresh and try again.")
+            raise
+        if "error" in result:
+            status = result.get("status", 502)
+            if type(status) is not int or status not in (400, 403, 404, 409, 502, 504):
+                status = 502
+            message = result["error"]
+            raise RequestError(status, message[:1000] if isinstance(message, str) else "Could not close the selected session")
+        return result
+
+    def preview_close(self, instance_id, body):
+        if set(body) != {"generation"}:
+            raise RequestError(400, "Invalid close preview request")
+        result = self._close_adapter("close-preview", instance_id, body["generation"])
+        try:
+            target = self.close_target(result.get("target"))
+        except RequestError:
+            raise RequestError(502, "The adapter did not report a safe close target")
+        return {"target": target}
+
+    def close_session(self, instance_id, body):
+        if set(body) != {"generation", "target", "confirmed"} or body.get("confirmed") is not True:
+            raise RequestError(400, "Explicit close confirmation is required")
+        target = self.close_target(body["target"])
+        result = self._close_adapter("close", instance_id, body["generation"], target)
+        if result.get("closed") is not True or result.get("paneId") != target["paneId"]:
+            raise RequestError(502, "Close status is unknown. Refresh and inspect Herdr before trying again.")
+        with self.discovery_lock:
+            self.cache = None
+            self.cache_at = 0
+        return {"closed": True, "paneId": result["paneId"]}
 
     def create(self, body):
         spec = creation_spec(body)
@@ -213,6 +278,10 @@ def make_handler(hub):
                         self.send_json(202, hub.create(body))
                     elif path.startswith("/api/sessions/") and path.endswith("/open"):
                         self.send_json(200, hub.open_session(path[len("/api/sessions/"):-len("/open")], body))
+                    elif path.startswith("/api/sessions/") and path.endswith("/close-preview"):
+                        self.send_json(200, hub.preview_close(path[len("/api/sessions/"):-len("/close-preview")], body))
+                    elif path.startswith("/api/sessions/") and path.endswith("/close"):
+                        self.send_json(200, hub.close_session(path[len("/api/sessions/"):-len("/close")], body))
                     else:
                         raise RequestError(404, "Not found")
                 else:

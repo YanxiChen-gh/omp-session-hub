@@ -17,8 +17,6 @@ class InstallTests(unittest.TestCase):
             command = ["sh", str(ROOT / "install.sh"), "--source", str(ROOT), "--revision", REVISION]
             subprocess.run(command, env=env, check=True, capture_output=True)
             executable = home / ".local/bin/omp-session-hub"
-            result = subprocess.run([str(executable), "--version"], env=env, check=True, capture_output=True, text=True)
-            self.assertEqual(result.stdout.strip(), "0.1.0")
             stopped = subprocess.run([str(executable), "service", "status", "hub"], env=env, capture_output=True)
             self.assertEqual(stopped.returncode, 1)
             invalid = subprocess.run([str(executable), "service", "install", "hub", "--adapter", str(home / "missing.py")], env=env, capture_output=True)

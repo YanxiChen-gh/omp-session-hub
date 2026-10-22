@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { sessions: [], inventory: null, refreshing: false, inventoryLoading: false, creating: false, jobId: null, result: null, signature: null };
+const state = { sessions: [], inventory: null, refreshing: false, inventoryLoading: false, creating: false, jobId: null, result: null, signature: null, sessionActions: new Map(), discoveryVersion: 0, refreshQueued: false, inventoryQueued: false };
 const text = (value, fallback = 'Unknown') => typeof value === 'string' && value.trim() ? value : fallback;
 
 async function api(path, body) {
@@ -27,7 +27,11 @@ async function api(path, body) {
     }
     return data;
   } catch (error) {
-    if (error.name === 'AbortError') throw new Error('The hub took too long to respond. Check your connection and try again.');
+    if (error.name === 'AbortError') {
+      const timeout = new Error('The hub took too long to respond. Check your connection and try again.');
+      timeout.timedOut = true;
+      throw timeout;
+    }
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -45,27 +49,118 @@ function element(tag, content, className) {
 function canOpen(host) {
   return typeof host.instanceId === 'string' && host.instanceId.length > 0 && Number.isInteger(host.generation);
 }
+function canClose(host) {
+  return canOpen(host) && /^[a-z0-9-]{8,64}$/.test(host.instanceId) && host.access === 'control'
+    && Number.isSafeInteger(host.generation) && Number.isSafeInteger(host.pid) && host.pid > 0
+    && typeof host.sessionId === 'string' && host.sessionId.trim().length > 0;
+}
+function updateSessionButtons(card) {
+  const pending = state.sessionActions.get(card.dataset.instanceId);
+  for (const button of card.querySelectorAll('[data-session-action]')) {
+    button.disabled = button.dataset.available !== 'true' || Boolean(pending);
+    if (pending === button.dataset.sessionAction) button.setAttribute('aria-busy', 'true');
+    else button.removeAttribute('aria-busy');
+  }
+}
+function setSessionAction(instanceId, action) {
+  if (action) state.sessionActions.set(instanceId, action);
+  else state.sessionActions.delete(instanceId);
+  for (const card of $('session-list').children) {
+    if (card.dataset.instanceId === instanceId) updateSessionButtons(card);
+  }
+}
 function openButton(host) {
   const button = element('button', 'Open session');
   button.type = 'button';
-  button.disabled = !canOpen(host);
+  button.dataset.sessionAction = 'open';
+  button.dataset.available = String(canOpen(host));
   button.setAttribute('aria-label', `Open ${text(host.sessionName, 'OMP session')}`);
   button.addEventListener('click', async () => {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
+    if (!canOpen(host) || state.sessionActions.has(host.instanceId)) return;
+    setSessionAction(host.instanceId, 'open');
+    showError('session-action-error', '');
+    $('session-action-status').textContent = `Opening "${text(host.sessionName, 'OMP session')}"...`;
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(host.instanceId)}/open`, { generation: host.generation });
       if (typeof data.url !== 'string') throw new Error('The hub returned no session link.');
       const url = new URL(data.url);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('The hub returned an invalid session link.');
+      setSessionAction(host.instanceId, null);
       window.location.assign(url.href);
     } catch (error) {
-      showError('session-error', `Could not open the session: ${error.message}`);
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      $('session-action-status').textContent = '';
+      showError('session-action-error', `Could not open the session: ${error.message}`);
+      setSessionAction(host.instanceId, null);
     }
   });
   return button;
+}
+function closeButton(host) {
+  const button = element('button', 'Close session', 'secondary danger');
+  button.type = 'button';
+  button.dataset.sessionAction = 'close';
+  button.dataset.available = String(canClose(host));
+  button.setAttribute('aria-label', `Close ${text(host.sessionName, 'OMP session')}`);
+  button.addEventListener('click', () => closeSession(host));
+  return button;
+}
+async function closeSession(host) {
+  if (!canClose(host) || state.sessionActions.has(host.instanceId)) return;
+  const selection = { instanceId: host.instanceId, generation: host.generation, title: text(host.sessionName, 'Untitled OMP session'), busy: host.busy === true };
+  const restoreFocus = document.activeElement?.dataset.sessionAction === 'close'
+    && document.activeElement.closest('.session-card')?.dataset.instanceId === selection.instanceId;
+  setSessionAction(selection.instanceId, 'close');
+  showError('session-action-error', '');
+  $('session-action-status').textContent = `Preparing to close "${selection.title}"...`;
+  let closeRequested = false;
+  try {
+    const preview = await api(`/api/sessions/${encodeURIComponent(selection.instanceId)}/close-preview`, { generation: selection.generation });
+    const target = preview?.target;
+    const keys = ['paneId', 'terminalId', 'tabId', 'workspaceId', 'closesTab', 'closesWorkspace'];
+    if (!target || typeof target !== 'object' || Array.isArray(target)
+      || Object.keys(target).sort().join(',') !== [...keys].sort().join(',')
+      || !keys.slice(0, 4).every((key) => typeof target[key] === 'string' && target[key].trim())
+      || typeof target.closesTab !== 'boolean' || typeof target.closesWorkspace !== 'boolean') {
+      throw new Error('The hub returned an invalid close preview.');
+    }
+    const confirmedTarget = Object.freeze({ ...target });
+    const message = [
+      `Close "${selection.title}"?`,
+      `This stops the live OMP agent and closes its Herdr pane (${confirmedTarget.paneId}). Saved session history is kept.`,
+      selection.busy ? 'Warning: this session is working. Closing it interrupts the current work.' : '',
+      confirmedTarget.closesTab ? 'This is the last pane in its tab, so the tab will also close.' : '',
+      confirmedTarget.closesWorkspace ? 'This is the last pane in its workspace, so the workspace will also close.' : '',
+      'Choose OK to close the session, or Cancel to leave it open.',
+    ].filter(Boolean).join('\n\n');
+    if (!window.confirm(message)) {
+      $('session-action-status').textContent = 'Close canceled. No close request was sent.';
+      return;
+    }
+    $('session-action-status').textContent = `Closing "${selection.title}"...`;
+    closeRequested = true;
+    const result = await api(`/api/sessions/${encodeURIComponent(selection.instanceId)}/close`, {
+      generation: selection.generation, target: confirmedTarget, confirmed: true,
+    });
+    if (result?.closed !== true || result.paneId !== confirmedTarget.paneId) throw new Error('The hub did not confirm that the selected pane closed.');
+    state.discoveryVersion += 1;
+    state.sessions = state.sessions.filter((item) => item.instanceId !== selection.instanceId || item.generation !== selection.generation);
+    renderSessions();
+    $('session-action-status').textContent = `Closed "${selection.title}". Saved session history is kept.`;
+    await Promise.all([refreshSessions(false, true), loadInventory(true)]);
+  } catch (error) {
+    $('session-action-status').textContent = '';
+    const detail = error.timedOut ? 'The hub took too long to respond.' : error.message;
+    const outcome = !closeRequested ? 'No close request was sent.'
+      : [400, 403, 404, 409].includes(error.status) ? 'The close request was refused.'
+        : 'The close outcome is unknown; the request may have reached the pane.';
+    showError('session-action-error', `Could not complete closing "${selection.title}": ${detail} ${outcome} Refresh sessions and inspect Herdr before another close attempt. Do not retry blindly.`);
+  } finally {
+    setSessionAction(selection.instanceId, null);
+    if (restoreFocus && document.activeElement === document.body) {
+      const card = [...$('session-list').children].find((item) => item.dataset.instanceId === selection.instanceId);
+      (card?.querySelector('[data-session-action="close"]') || $('refresh')).focus();
+    }
+  }
 }
 function renderSessions() {
   const signature = JSON.stringify(state.sessions);
@@ -74,6 +169,7 @@ function renderSessions() {
   const fragment = document.createDocumentFragment();
   for (const host of state.sessions) {
     const card = element('li', undefined, 'session-card');
+    card.setAttribute('data-instance-id', host.instanceId);
     card.append(element('h3', text(host.sessionName, 'Untitled OMP session')));
     const cwd = text(host.cwd, 'Directory unavailable');
     const repo = typeof host.cwd === 'string' ? host.cwd.replace(/\/+$/, '').split('/').pop() : '';
@@ -87,19 +183,28 @@ function renderSessions() {
     const relay = host.relayConnected === true ? 'Relay connected' : host.relayConnected === false ? 'Relay disconnected' : 'Relay unknown';
     badges.append(element('span', activity, 'badge'), element('span', relay, 'badge'));
     if (typeof host.access === 'string') badges.append(element('span', `Access: ${host.access}`, 'badge'));
-    card.append(badges, openButton(host));
+    card.append(badges, openButton(host), closeButton(host));
+    if (!canClose(host)) card.append(element('p', host.access === 'view'
+      ? 'View-only sessions cannot be closed here.'
+      : 'Closing requires control access and valid live session details.', 'hint'));
+    updateSessionButtons(card);
     fragment.append(card);
   }
   $('session-list').replaceChildren(fragment);
 }
-async function refreshSessions(manual = false) {
-  if (state.refreshing) return;
+async function refreshSessions(manual = false, afterCurrent = false) {
+  if (state.refreshing) {
+    if (afterCurrent) state.refreshQueued = true;
+    return;
+  }
   state.refreshing = true;
+  const version = state.discoveryVersion;
   $('refresh').disabled = true;
   $('session-list').setAttribute('aria-busy', 'true');
   if (manual) $('session-status').textContent = 'Refreshing sessions...';
   try {
     const data = await api('/api/sessions');
+    if (version !== state.discoveryVersion) return;
     if (!Array.isArray(data.sessions)) throw new Error('The hub returned an invalid session list.');
     state.sessions = data.sessions.filter((host) => host && typeof host === 'object' && !Array.isArray(host));
     renderSessions();
@@ -107,12 +212,17 @@ async function refreshSessions(manual = false) {
     if ($('session-status').textContent !== message) $('session-status').textContent = message;
     showError('session-error', '');
   } catch (error) {
+    if (version !== state.discoveryVersion) return;
     $('session-status').textContent = state.sessions.length ? 'Showing the last received sessions. They may be out of date.' : 'Sessions unavailable.';
     showError('session-error', `${error.message} Use Refresh to try again.`);
   } finally {
     state.refreshing = false;
     $('refresh').disabled = false;
     $('session-list').removeAttribute('aria-busy');
+    if (state.refreshQueued) {
+      state.refreshQueued = false;
+      refreshSessions();
+    }
   }
 }
 function fillOptions(id, values, placeholder) {
@@ -126,13 +236,18 @@ function fillOptions(id, values, placeholder) {
   select.replaceChildren(...options);
   if (options.some((option) => option.value === selected)) select.value = selected;
 }
-async function loadInventory() {
-  if (state.inventoryLoading) return;
+async function loadInventory(afterCurrent = false) {
+  if (state.inventoryLoading) {
+    if (afterCurrent === true) state.inventoryQueued = true;
+    return;
+  }
   state.inventoryLoading = true;
+  const version = state.discoveryVersion;
   $('reload-inventory').disabled = true;
   $('inventory-status').textContent = 'Loading repositories and workspaces...';
   try {
     const data = await api('/api/inventory');
+    if (version !== state.discoveryVersion) return;
     if (!Array.isArray(data.repositories) || !Array.isArray(data.workspaces)) throw new Error('The hub returned invalid inventory.');
     state.inventory = data;
     fillOptions('repository', data.repositories.filter((item) => item && typeof item === 'object'), 'Choose a repository');
@@ -140,11 +255,16 @@ async function loadInventory() {
     $('inventory-status').textContent = `${data.repositories.length} repositories, ${data.workspaces.length} workspaces available.`;
     showError('inventory-error', '');
   } catch (error) {
+    if (version !== state.discoveryVersion) return;
     $('inventory-status').textContent = state.inventory ? 'Using the last received inventory.' : 'Inventory unavailable. Local path and GitHub clone are still available.';
     showError('inventory-error', error.message);
   } finally {
     state.inventoryLoading = false;
     $('reload-inventory').disabled = false;
+    if (state.inventoryQueued) {
+      state.inventoryQueued = false;
+      loadInventory();
+    }
   }
 }
 function updateMode() {
