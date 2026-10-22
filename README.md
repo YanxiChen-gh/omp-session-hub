@@ -77,6 +77,8 @@ omp-session-hub service status gateway
 
 Mac services use a per-user LaunchAgent with `RunAtLoad` and `KeepAlive`. Linux services use a locked per-user supervisor that restarts a failed child; invoke `service ensure hub` from the CDE startup workflow to restore it after an environment restart. Neither service keeps a stopped CDE or sleeping Mac alive. `service stop hub` and `service stop gateway` stop only their managed service. Services retain their installed configuration when ensured without arguments.
 
+Both listeners bind numeric addresses without reverse-DNS lookup, so DNS availability does not delay startup. Private service state and bounded logs live under `${XDG_STATE_HOME:-~/.local/state}/omp-session-hub`. On the Mac, `gateway.log` records the selected phone-facing URL and address changes.
+
 ## Workspace adapter
 
 The adapter is a local Python file selected by the operator, never by an HTTP request. The hub invokes it with the same Python interpreter:

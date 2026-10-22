@@ -9,8 +9,10 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import unquote, urlsplit
+
+from .http import Server
 
 MAX_REQUEST = 1024 * 1024
 MAX_RESPONSE = 8 * 1024 * 1024
@@ -82,7 +84,7 @@ def _allowed_target(target):
     return path in ("/", "/app.js", "/style.css", "/healthz") or path.startswith("/api/")
 
 
-class GatewayServer(ThreadingHTTPServer):
+class GatewayServer(Server):
     daemon_threads = True
     allow_reuse_address = True
 

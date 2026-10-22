@@ -8,6 +8,30 @@ from unittest.mock import patch
 
 from omp_hub.hub import Hub, creation_spec, make_handler
 from omp_hub.http import RequestError, Server
+from omp_hub.gateway import GatewayServer
+
+
+class OfflineStartupTests(unittest.TestCase):
+    def test_hub_and_gateway_serve_when_reverse_dns_is_unavailable(self):
+        with patch("socket.getfqdn", side_effect=OSError("DNS unavailable")):
+            upstream = Server(("127.0.0.1", 0), make_handler(object()))
+            gateway = GatewayServer(("127.0.0.1", 0), upstream.server_port)
+        threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (upstream, gateway)]
+        for thread in threads:
+            thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", gateway.server_port, timeout=3)
+            connection.request("GET", "/healthz")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read()), {"ok": True})
+            connection.close()
+        finally:
+            for server in (gateway, upstream):
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join()
 
 
 class BoundaryTests(unittest.TestCase):

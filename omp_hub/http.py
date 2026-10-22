@@ -2,6 +2,7 @@
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 from urllib.parse import urlsplit
 
 MAX_BODY = 32 * 1024
@@ -23,6 +24,11 @@ class RequestError(Exception):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 32
+
+    def server_bind(self):
+        # Both listeners use numeric addresses; startup must not wait for DNS.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def get_request(self):
         connection, address = super().get_request()
