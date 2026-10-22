@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>OMP Session Hub</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#sessions">Skip to sessions</a>
+  <header class="page-header">
+    <div><p class="eyebrow">OMP</p><h1>Session Hub</h1><p class="muted">Your workspaces, within reach.</p></div>
+    <a class="button secondary" href="#create">New session</a>
+  </header>
+  <main>
+    <section id="sessions" aria-labelledby="sessions-title" tabindex="-1">
+      <div class="section-heading"><h2 id="sessions-title">Active sessions</h2><button id="refresh" type="button" class="secondary">Refresh</button></div>
+      <p id="session-status" role="status">Loading sessions...</p>
+      <p id="session-error" class="error" role="alert" hidden></p>
+      <ul id="session-list" class="session-list" aria-label="Active OMP sessions"></ul>
+    </section>
+    <section id="create" class="create-panel" aria-labelledby="create-title">
+      <p class="eyebrow">Start something</p><h2 id="create-title">New workspace or session</h2>
+      <p class="muted">Create a workspace, or add an OMP session to an existing one.</p>
+      <form id="create-form">
+        <label for="mode">Start from</label>
+        <select id="mode" name="mode"><option value="repository">Known repository</option><option value="local">Local repository path</option><option value="clone">Clone from GitHub</option><option value="workspace">Existing workspace</option></select>
+        <div id="inventory-status" role="status">Loading repositories and workspaces...</div>
+        <p id="inventory-error" role="alert" class="error" hidden></p>
+        <button id="reload-inventory" type="button" class="secondary">Reload inventory</button>
+        <div data-mode="repository"><label for="repository">Repository</label><select id="repository" name="repository" required><option value="">Choose a repository</option></select></div>
+        <div data-mode="local" hidden><label for="local-path">Repository path</label><input id="local-path" name="localPath" type="text" placeholder="/path/to/repository" spellcheck="false" autocapitalize="none" autocomplete="off" disabled required><p class="hint">An existing repository on the machine running OMP.</p></div>
+        <div data-mode="clone" hidden><label for="clone-repository">GitHub repository</label><input id="clone-repository" name="cloneRepository" type="text" placeholder="owner/repository" spellcheck="false" autocapitalize="none" autocomplete="off" disabled required><label for="clone-root">Clone parent directory (optional)</label><input id="clone-root" name="cloneRoot" type="text" placeholder="Use the configured repository directory" spellcheck="false" autocapitalize="none" autocomplete="off" disabled></div>
+        <div data-mode="workspace" hidden><label for="workspace">Workspace</label><select id="workspace" name="workspaceId" disabled required><option value="">Choose a workspace</option></select><p class="hint">Adds a new OMP tab without changing this workspace's directory.</p></div>
+        <div id="workspace-options">
+          <label for="checkout">Checkout</label><select id="checkout" name="checkout"><option value="fresh">Fresh worktree</option><option value="primary">Primary checkout</option></select>
+          <label for="session-kind">Session</label><select id="session-kind" name="sessionKind"><option value="agent">OMP agent</option><option value="shell">Shell only</option></select>
+          <label class="check"><input id="editor" name="editor" type="checkbox"> Open editor</label>
+        </div>
+        <div id="prompt-field"><label for="prompt">Initial prompt (optional)</label><textarea id="prompt" name="prompt" rows="4" placeholder="What would you like to work on?"></textarea></div>
+        <button id="submit-create" type="submit">Create workspace</button>
+        <p id="create-status" role="status" aria-live="polite"></p>
+        <p id="create-error" class="error" role="alert" hidden></p>
+        <button id="resume-job" type="button" class="secondary" hidden>Check creation status</button>
+        <div id="create-result" hidden></div>
+      </form>
+    </section>
+  </main>
+  <footer>Access is granted by network reachability. Use only on a trusted private network.</footer>
+</body>
+</html>
