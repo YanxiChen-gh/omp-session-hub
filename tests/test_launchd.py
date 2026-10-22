@@ -63,10 +63,12 @@ class LaunchdTests(unittest.TestCase):
                         ).stdout.splitlines()
                         children = [line for line in processes if len(line.split()) > 2 and line.split()[1] == process_id.group(1)]
                         diagnostics["children"] = children
-                        diagnostics["supervisorStack"] = subprocess.run(
-                            ["/usr/bin/sample", process_id.group(1), "1", "1"],
-                            capture_output=True, text=True, timeout=10,
-                        ).stdout[:16000]
+                        for sampled in [process_id.group(1)] + [line.split()[0] for line in children]:
+                            stack = subprocess.run(
+                                ["/usr/bin/sample", sampled, "1", "1"],
+                                capture_output=True, text=True, timeout=10,
+                            ).stdout
+                            diagnostics["stack-" + sampled] = stack.split("\nBinary Images:", 1)[0][-12000:]
                 self.assertEqual(health, {"ok": True}, diagnostics)
                 subprocess.run([app, "service", "ensure", "hub"], env=environment, check=True, capture_output=True, timeout=15)
                 subprocess.run([app, "service", "stop", "hub"], env=environment, check=True, capture_output=True, timeout=20)
