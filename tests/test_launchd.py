@@ -44,7 +44,17 @@ class LaunchdTests(unittest.TestCase):
                         break
                     except (OSError, urllib.error.URLError):
                         time.sleep(0.1)
-                self.assertEqual(health, {"ok": True})
+                state = home / "state/omp-session-hub"
+                diagnostics = {}
+                if health is None:
+                    for name in ("hub.json", "hub.log", "hub.log.1"):
+                        path = state / name
+                        if path.exists():
+                            diagnostics[name] = path.read_text(errors="replace")[-8000:]
+                    diagnostics["launchd"] = subprocess.run(
+                        ["/bin/launchctl", "print", label], capture_output=True, text=True,
+                    ).stdout[-8000:]
+                self.assertEqual(health, {"ok": True}, diagnostics)
                 subprocess.run([app, "service", "ensure", "hub"], env=environment, check=True, capture_output=True, timeout=15)
                 subprocess.run([app, "service", "stop", "hub"], env=environment, check=True, capture_output=True, timeout=20)
                 status = subprocess.run([app, "service", "status", "hub"], env=environment, capture_output=True, text=True)
