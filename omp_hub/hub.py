@@ -73,7 +73,7 @@ def creation_spec(body):
     if result["checkout"] not in ("fresh", "primary"):
         raise RequestError(400, "Choose a fresh or primary checkout")
     if result.get("workspaceId"):
-        if not re.fullmatch(r"w[0-9]+", result["workspaceId"]):
+        if result["workspaceId"].startswith("-") or len(result["workspaceId"]) > 256:
             raise RequestError(400, "Invalid workspace")
         if result.get("repository") or result.get("cloneRepository") or result.get("cloneRoot"):
             raise RequestError(400, "A new tab uses its existing workspace repository")

@@ -113,6 +113,7 @@ class SessionTests(unittest.TestCase):
 
     def test_invalid_creation_combinations_rejected(self):
         for spec in (
+            {"workspaceId": "-flag"},
             {"workspaceId": "w1", "repository": "/repo"},
             {"repository": "/repo", "agent": "false"},
             {"repository": "/repo", "agent": False, "prompt": "run"},
@@ -121,6 +122,10 @@ class SessionTests(unittest.TestCase):
         ):
             with self.subTest(spec=spec), self.assertRaises(RequestError):
                 creation_spec(spec)
+
+    def test_workspace_identifiers_are_opaque_not_decimal_numbers(self):
+        spec = creation_spec({"workspaceId": "wA"})
+        self.assertEqual(spec["workspaceId"], "wA")
 
 
 if __name__ == "__main__":

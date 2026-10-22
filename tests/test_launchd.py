@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -51,9 +52,21 @@ class LaunchdTests(unittest.TestCase):
                         path = state / name
                         if path.exists():
                             diagnostics[name] = path.read_text(errors="replace")[-8000:]
-                    diagnostics["launchd"] = subprocess.run(
+                    launchd = subprocess.run(
                         ["/bin/launchctl", "print", label], capture_output=True, text=True,
-                    ).stdout[-8000:]
+                    ).stdout
+                    diagnostics["launchd"] = launchd[-8000:]
+                    process_id = re.search(r"\n\s*pid = (\d+)", launchd)
+                    if process_id:
+                        processes = subprocess.run(
+                            ["/bin/ps", "-axo", "pid,ppid,stat,comm"], capture_output=True, text=True,
+                        ).stdout.splitlines()
+                        children = [line for line in processes if len(line.split()) > 2 and line.split()[1] == process_id.group(1)]
+                        diagnostics["children"] = children
+                        diagnostics["supervisorStack"] = subprocess.run(
+                            ["/usr/bin/sample", process_id.group(1), "1", "1"],
+                            capture_output=True, text=True, timeout=10,
+                        ).stdout[:16000]
                 self.assertEqual(health, {"ok": True}, diagnostics)
                 subprocess.run([app, "service", "ensure", "hub"], env=environment, check=True, capture_output=True, timeout=15)
                 subprocess.run([app, "service", "stop", "hub"], env=environment, check=True, capture_output=True, timeout=20)
